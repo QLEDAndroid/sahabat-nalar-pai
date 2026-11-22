@@ -7,6 +7,7 @@ import { ALL_MODULES } from "@/lib/modules";
 import { SpotlightCard } from "@/components/ui/SpotlightCard";
 import {
   createClassroom,
+  deleteClassroom,
   getClassrooms,
   getCurrentUser,
   joinClassroomByCode,
@@ -19,6 +20,7 @@ import {
   Plus,
   ShieldCheck,
   Sparkles,
+  Trash2,
   Users,
   X,
 } from "lucide-react";
@@ -110,6 +112,15 @@ export default function HomePage() {
     setNewNama("");
     setNewSub("");
     setShowCreate(false);
+    loadData();
+  }
+
+  async function handleDeleteClass(cls: Classroom) {
+    if (!window.confirm(`Hapus kelas "${cls.nama}" (${cls.kodeKelas})?`)) return;
+    deleteClassroom(cls.id);
+    await fetch(`/api/classrooms?classId=${encodeURIComponent(cls.id)}`, {
+      method: "DELETE",
+    }).catch(() => {});
     loadData();
   }
 
@@ -289,6 +300,17 @@ export default function HomePage() {
                     <span>Masuk Kelas</span>
                     <ArrowRight className="h-3.5 w-3.5" />
                   </Link>
+                  {user.role === "guru" && (
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteClass(cls)}
+                      title="Hapus Kelas"
+                      aria-label={`Hapus kelas ${cls.nama}`}
+                      className="inline-flex items-center justify-center rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-rose-600 transition hover:bg-rose-100"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  )}
                   <Link
                     href={`/belajar/${cls.visibility.enabledBabIds[cls.visibility.enabledBabIds.length - 1] || "bab-09"}`}
                     className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs font-semibold text-slate-700 hover:border-kemenag-400"

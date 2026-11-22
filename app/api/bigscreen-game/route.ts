@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import fs from "fs";
-import path from "path";
+import { kvGet, kvSet } from "@/lib/kvStore";
 
 export type BigScreenGameType = "race" | "tower" | "jeopardy" | "territory" | "bomb";
 
@@ -17,26 +16,12 @@ export interface BigScreenRoom {
   updatedAt: number;
 }
 
-const STORE_PATH = path.join(process.env.VERCEL ? "/tmp/sahabat-nalar-pai" : path.join(process.cwd(), "data"), "bigscreen-games-store.json");
-
-function readRooms(): Record<string, BigScreenRoom> {
-  try {
-    if (fs.existsSync(STORE_PATH)) {
-      const raw = fs.readFileSync(STORE_PATH, "utf-8");
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object") return parsed;
-    }
-  } catch {}
-  return {};
+async function readRooms(): Promise<Record<string, BigScreenRoom>> {
+  return kvGet<Record<string, BigScreenRoom>>("snp_bigscreen_rooms", {});
 }
 
-function writeRooms(rooms: Record<string, BigScreenRoom>) {
-  try {
-    fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
-    fs.writeFileSync(STORE_PATH, JSON.stringify(rooms, null, 2), "utf-8");
-  } catch (e) {
-    console.error("[bigscreen-game] write error:", e);
-  }
+async function writeRooms(rooms: Record<string, BigScreenRoom>) {
+  await kvSet("snp_bigscreen_rooms", rooms);
 }
 
 function initialStateFor(gameType: BigScreenGameType): Record<string, unknown> {
@@ -72,7 +57,7 @@ function initialStateFor(gameType: BigScreenGameType): Record<string, unknown> {
 
 export async function GET(req: NextRequest) {
   const pin = req.nextUrl.searchParams.get("pin")?.trim();
-  const rooms = readRooms();
+  const rooms = await readRooms();
   if (!pin) return NextResponse.json({ rooms: Object.values(rooms) });
   const room = rooms[pin];
   if (!room) {
@@ -86,7 +71,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const allowed: BigScreenGameType[] = ["race", "tower", "jeopardy", "territory", "bomb"];
     const gameType: BigScreenGameType = allowed.includes(body.gameType) ? body.gameType : "race";
-    const rooms = readRooms();
+    const rooms = await readRooms();
     // Generate unique 4-digit PIN (avoid 9026/8026 defaults)
     let pin = String(Math.floor(1000 + Math.random() * 8999));
     while (pin === "9026" || pin === "8026" || rooms[pin]) {
@@ -104,7 +89,7 @@ export async function POST(req: NextRequest) {
       updatedAt: Date.now(),
     };
     rooms[pin] = room;
-    writeRooms(rooms);
+    await writeRooms(rooms);
     return NextResponse.json({ room }, { status: 201 });
   } catch {
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
@@ -116,7 +101,7 @@ export async function PATCH(req: NextRequest) {
     const body = await req.json();
     const pin = String(body.pin || "").trim();
     const action = String(body.action || "");
-    const rooms = readRooms();
+    const rooms = await readRooms();
     const room = rooms[pin];
     if (!room) {
       return NextResponse.json({ error: "Kode tidak ditemukan" }, { status: 404 });
@@ -128,7 +113,7 @@ export async function PATCH(req: NextRequest) {
       room.eventSeq += 1;
       room.lastSfx = "powerup";
       room.updatedAt = Date.now();
-      writeRooms(rooms);
+      await writeRooms(rooms);
       return NextResponse.json({ room });
     }
 
@@ -138,7 +123,7 @@ export async function PATCH(req: NextRequest) {
       room.eventSeq += 1;
       room.lastSfx = "powerup";
       room.updatedAt = Date.now();
-      writeRooms(rooms);
+      await writeRooms(rooms);
       return NextResponse.json({ room });
     }
 
@@ -150,7 +135,7 @@ export async function PATCH(req: NextRequest) {
       if (body.sfx) room.lastSfx = String(body.sfx);
       room.eventSeq += 1;
       room.updatedAt = Date.now();
-      writeRooms(rooms);
+      await writeRooms(rooms);
       return NextResponse.json({ room });
     }
 

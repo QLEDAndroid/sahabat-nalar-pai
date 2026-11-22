@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import fs from "fs";
-import path from "path";
+import { kvGet, kvSet } from "@/lib/kvStore";
 import { Classroom, ForumPost, AssessmentSubmission, UserProfile } from "@/lib/types";
 
 interface ClassroomDB {
@@ -10,40 +9,11 @@ interface ClassroomDB {
   users: UserProfile[];
 }
 
-const STORE_PATH = path.join(
-  process.env.VERCEL ? "/tmp/sahabat-nalar-pai" : path.join(process.cwd(), "data"),
-  "classrooms-store.json"
-);
-
-function readDB(): ClassroomDB {
-  try {
-    if (fs.existsSync(STORE_PATH)) {
-      const raw = fs.readFileSync(STORE_PATH, "utf-8");
-      const parsed = JSON.parse(raw);
-      if (parsed && Array.isArray(parsed.classrooms)) {
-        return {
-          classrooms: parsed.classrooms || [],
-          posts: parsed.posts || [],
-          submissions: parsed.submissions || [],
-          users: parsed.users || [],
-        };
-      }
-    }
-  } catch {}
-  return { classrooms: [], posts: [], submissions: [], users: [] };
-}
-
-function writeDB(db: ClassroomDB) {
-  try {
-    fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
-    fs.writeFileSync(STORE_PATH, JSON.stringify(db, null, 2), "utf-8");
-  } catch (e) {
-    console.error("[classrooms-store] write error:", e);
-  }
-}
+const KEY = "snp_classrooms_db";
+const EMPTY_DB: ClassroomDB = { classrooms: [], posts: [], submissions: [], users: [] };
 
 export async function GET(req: NextRequest) {
-  const db = readDB();
+  const db = await kvGet<ClassroomDB>(KEY, EMPTY_DB);
   const classId = req.nextUrl.searchParams.get("classId");
   const code = req.nextUrl.searchParams.get("code")?.trim().toUpperCase();
 
@@ -74,14 +44,14 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const db = readDB();
+    const db = await kvGet<ClassroomDB>(KEY, EMPTY_DB);
 
     if (body.action === "upsert_class" && body.classroom) {
       const cls = body.classroom as Classroom;
       const idx = db.classrooms.findIndex((c) => c.id === cls.id);
       if (idx >= 0) db.classrooms[idx] = cls;
       else db.classrooms.push(cls);
-      writeDB(db);
+      await kvSet(KEY, db);
       return NextResponse.json({ classroom: cls });
     }
 
@@ -90,7 +60,7 @@ export async function POST(req: NextRequest) {
       const idx = db.users.findIndex((x) => x.id === u.id || x.email === u.email);
       if (idx >= 0) db.users[idx] = { ...db.users[idx], ...u };
       else db.users.push(u);
-      writeDB(db);
+      await kvSet(KEY, db);
       return NextResponse.json({ user: u });
     }
 
@@ -103,7 +73,7 @@ export async function POST(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   try {
     const body = await req.json();
-    const db = readDB();
+    const db = await kvGet<ClassroomDB>(KEY, EMPTY_DB);
 
     if (body.action === "join_by_code") {
       const code = String(body.kodeKelas || "").trim().toUpperCase();
@@ -117,7 +87,6 @@ export async function PATCH(req: NextRequest) {
         if (uIdx >= 0) db.users[uIdx] = { ...db.users[uIdx], ...student, kelasUtama: target.nama };
         else db.users.push({ ...student, kelasUtama: target.nama });
 
-        // 1 student = 1 class enforcement
         db.classrooms = db.classrooms.map((c) => ({
           ...c,
           studentIds:
@@ -125,7 +94,7 @@ export async function PATCH(req: NextRequest) {
               ? Array.from(new Set([...c.studentIds, student.id]))
               : c.studentIds.filter((id) => id !== student.id),
         }));
-        writeDB(db);
+        await kvSet(KEY, db);
       }
       const updated = db.classrooms.find((c) => c.id === target.id) || target;
       return NextResponse.json({ classroom: updated });
@@ -135,19 +104,19 @@ export async function PATCH(req: NextRequest) {
       db.classrooms = db.classrooms.map((c) =>
         c.id === body.classId ? { ...c, visibility: body.visibility } : c
       );
-      writeDB(db);
+      await kvSet(KEY, db);
       return NextResponse.json({ ok: true });
     }
 
     if (body.action === "add_post" && body.post) {
       db.posts = [body.post as ForumPost, ...db.posts];
-      writeDB(db);
+      await kvSet(KEY, db);
       return NextResponse.json({ posts: db.posts.filter((p) => p.classId === body.post.classId) });
     }
 
     if (body.action === "delete_post" && body.postId) {
       db.posts = db.posts.filter((p) => p.id !== body.postId);
-      writeDB(db);
+      await kvSet(KEY, db);
       return NextResponse.json({ ok: true });
     }
 
@@ -155,14 +124,14 @@ export async function PATCH(req: NextRequest) {
       db.posts = db.posts.map((p) =>
         p.id === body.postId ? { ...p, comments: [...p.comments, body.comment] } : p
       );
-      writeDB(db);
+      await kvSet(KEY, db);
       return NextResponse.json({ ok: true });
     }
 
     if (body.action === "submit_assessment" && body.submission) {
       const sub = body.submission as AssessmentSubmission;
       db.submissions = [sub, ...db.submissions];
-      writeDB(db);
+      await kvSet(KEY, db);
       return NextResponse.json({ ok: true });
     }
 
@@ -170,4 +139,17 @@ export async function PATCH(req: NextRequest) {
   } catch {
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
+}
+
+export async function DELETE(req: NextRequest) {
+  const classId = req.nextUrl.searchParams.get("classId")?.trim();
+  if (!classId) {
+    return NextResponse.json({ error: "Missing classId" }, { status: 400 });
+  }
+  const db = await kvGet<ClassroomDB>(KEY, EMPTY_DB);
+  db.classrooms = db.classrooms.filter((c) => c.id !== classId);
+  db.posts = db.posts.filter((p) => p.classId !== classId);
+  db.submissions = db.submissions.filter((s) => s.classId !== classId);
+  await kvSet(KEY, db);
+  return NextResponse.json({ ok: true });
 }

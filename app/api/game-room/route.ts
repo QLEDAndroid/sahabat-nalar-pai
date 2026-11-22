@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import fs from "fs";
-import path from "path";
+import { kvGet, kvSet } from "@/lib/kvStore";
 import { TUG_QUESTIONS } from "@/data/game-bank";
 
 export type TugTeam = "hijau" | "emas";
@@ -26,31 +25,17 @@ export interface TugRoom {
   updatedAt: number;
 }
 
-const STORE_PATH = path.join(process.env.VERCEL ? "/tmp/sahabat-nalar-pai" : path.join(process.cwd(), "data"), "tug-rooms-store.json");
-
-function readRooms(): Record<string, TugRoom> {
-  try {
-    if (fs.existsSync(STORE_PATH)) {
-      const raw = fs.readFileSync(STORE_PATH, "utf-8");
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object") return parsed;
-    }
-  } catch {}
-  return {};
+async function readRooms(): Promise<Record<string, TugRoom>> {
+  return kvGet<Record<string, TugRoom>>("snp_tug_rooms", {});
 }
 
-function writeRooms(rooms: Record<string, TugRoom>) {
-  try {
-    fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
-    fs.writeFileSync(STORE_PATH, JSON.stringify(rooms, null, 2), "utf-8");
-  } catch (e) {
-    console.error("[tug-rooms] write error:", e);
-  }
+async function writeRooms(rooms: Record<string, TugRoom>) {
+  await kvSet("snp_tug_rooms", rooms);
 }
 
 export async function GET(req: NextRequest) {
   const pin = req.nextUrl.searchParams.get("pin")?.trim();
-  const rooms = readRooms();
+  const rooms = await readRooms();
   if (!pin) {
     return NextResponse.json({ rooms: Object.values(rooms) });
   }
@@ -62,7 +47,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST() {
-  const rooms = readRooms();
+  const rooms = await readRooms();
   const pin = String(Math.floor(1000 + Math.random() * 9000));
   const room: TugRoom = {
     pin,
@@ -74,7 +59,7 @@ export async function POST() {
     updatedAt: Date.now(),
   };
   rooms[pin] = room;
-  writeRooms(rooms);
+  await writeRooms(rooms);
   return NextResponse.json({ room }, { status: 201 });
 }
 
@@ -83,7 +68,7 @@ export async function PATCH(req: NextRequest) {
     const body = await req.json();
     const pin = String(body.pin || "").trim();
     const action = String(body.action || "");
-    const rooms = readRooms();
+    const rooms = await readRooms();
     const room = rooms[pin];
     if (!room) {
       return NextResponse.json({ error: "PIN ruangan tidak ditemukan" }, { status: 404 });
@@ -98,7 +83,7 @@ export async function PATCH(req: NextRequest) {
         room.players.push({ id: playerId, name, team, score: 0 });
       }
       room.updatedAt = Date.now();
-      writeRooms(rooms);
+      await writeRooms(rooms);
       return NextResponse.json({ room, playerId });
     }
 
@@ -112,7 +97,7 @@ export async function PATCH(req: NextRequest) {
       room.lastPullTeam = undefined;
       room.players = room.players.map((p) => ({ ...p, score: 0 }));
       room.updatedAt = Date.now();
-      writeRooms(rooms);
+      await writeRooms(rooms);
       return NextResponse.json({ room });
     }
 
@@ -140,7 +125,7 @@ export async function PATCH(req: NextRequest) {
         room.winner = "emas";
       }
       room.updatedAt = Date.now();
-      writeRooms(rooms);
+      await writeRooms(rooms);
       return NextResponse.json({ room });
     }
 
@@ -155,7 +140,7 @@ export async function PATCH(req: NextRequest) {
           ? "hijau"
           : "emas";
       room.updatedAt = Date.now();
-      writeRooms(rooms);
+      await writeRooms(rooms);
       return NextResponse.json({ room });
     }
 

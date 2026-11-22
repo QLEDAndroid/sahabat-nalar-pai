@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { kvGet, kvSet } from "@/lib/kvStore";
 
 export interface LivePlayer {
   id: string;
@@ -27,36 +28,20 @@ export interface LiveRoom {
   updatedAt: number;
 }
 
-const globalRooms = globalThis as unknown as {
-  __snpLiveRooms?: Record<string, LiveRoom>;
-  __snpCheerSeq?: number;
-};
-
-function getRooms(): Record<string, LiveRoom> {
-  if (!globalRooms.__snpLiveRooms) {
-    globalRooms.__snpLiveRooms = {};
-  }
-  return globalRooms.__snpLiveRooms;
-}
-
-function getOrCreateRoom(pin: string): LiveRoom {
-  const rooms = getRooms();
-  if (!rooms[pin]) {
-    rooms[pin] = {
-      pin,
-      status: "lobby",
-      currentQuestionIdx: 0,
-      players: [],
-      cheers: [],
-      updatedAt: Date.now(),
-    };
-  }
-  return rooms[pin];
+function defaultRoom(pin: string): LiveRoom {
+  return {
+    pin,
+    status: "lobby",
+    currentQuestionIdx: 0,
+    players: [],
+    cheers: [],
+    updatedAt: Date.now(),
+  };
 }
 
 export async function GET(req: NextRequest) {
   const pin = req.nextUrl.searchParams.get("pin") || "9026";
-  const room = getOrCreateRoom(pin);
+  const room = await kvGet<LiveRoom>(`snp_live_${pin}`, defaultRoom(pin));
   return NextResponse.json(room);
 }
 
@@ -65,7 +50,8 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const pin = String(body.pin || "9026");
     const action = String(body.action || "");
-    const room = getOrCreateRoom(pin);
+    const key = `snp_live_${pin}`;
+    const room = await kvGet<LiveRoom>(key, defaultRoom(pin));
 
     if (action === "join") {
       const { id, nama } = body;
@@ -99,36 +85,40 @@ export async function POST(req: NextRequest) {
         player.benar += 1;
       } else {
         player.streak = 0;
-        player.eliminated = true;
       }
-    } else if (action === "cheer") {
-      const seq = (globalRooms.__snpCheerSeq || 0) + 1;
-      globalRooms.__snpCheerSeq = seq;
-      room.cheers.unshift({
-        id: seq,
-        sender: body.sender || "Spektator",
-        emoji: body.emoji || "🔥",
-        label: body.label || "Semangat!",
-        sound: body.sound || "hype",
-        createdAt: Date.now(),
-      });
-      room.cheers = room.cheers.slice(0, 15);
-    } else if (action === "host_update") {
-      if (body.status) room.status = body.status;
-      if (typeof body.currentQuestionIdx === "number") {
-        room.currentQuestionIdx = body.currentQuestionIdx;
+    } else if (action === "start") {
+      room.status = "question";
+      room.currentQuestionIdx = 0;
+    } else if (action === "next") {
+      const total = Number(body.totalQuestions || 4);
+      if (room.currentQuestionIdx + 1 >= total) {
+        room.status = "podium";
+      } else {
+        room.currentQuestionIdx += 1;
       }
+    } else if (action === "podium") {
+      room.status = "podium";
     } else if (action === "reset") {
       room.status = "lobby";
       room.currentQuestionIdx = 0;
       room.players = [];
       room.cheers = [];
+    } else if (action === "cheer") {
+      const ev: LiveCheerEvent = {
+        id: Date.now(),
+        sender: String(body.sender || "Penonton"),
+        emoji: String(body.emoji || "👏"),
+        label: String(body.label || "Semangat!"),
+        sound: String(body.sound || "applause"),
+        createdAt: Date.now(),
+      };
+      room.cheers = [...room.cheers.slice(-24), ev];
     }
 
     room.updatedAt = Date.now();
+    await kvSet(key, room);
     return NextResponse.json(room);
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : "Bad request";
-    return NextResponse.json({ error: msg }, { status: 400 });
+  } catch {
+    return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
 }
