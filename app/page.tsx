@@ -40,18 +40,33 @@ export default function HomePage() {
   const [joinCode, setJoinCode] = useState("");
   const [joinMsg, setJoinMsg] = useState("");
 
-  function loadData() {
+  async function loadData() {
     const u = getCurrentUser();
     if (!u) {
       router.replace("/login");
       return;
     }
     setUser(u);
-    const all = getClassrooms();
+    let all = getClassrooms();
+    try {
+      const res = await fetch("/api/classrooms", { cache: "no-store" });
+      if (res.ok) {
+        const db = await res.json();
+        if (Array.isArray(db.classrooms)) {
+          // Gabungkan kelas lokal & server agar selalu sinkron lintas perangkat
+          const map = new Map<string, Classroom>();
+          all.forEach((c) => map.set(c.id, c));
+          db.classrooms.forEach((c: Classroom) => map.set(c.id, c));
+          all = Array.from(map.values());
+          if (typeof window !== "undefined") {
+            window.localStorage.setItem("snp_classrooms_v1", JSON.stringify(all));
+          }
+        }
+      }
+    } catch {}
     if (u.role === "guru") {
       setClassrooms(all);
     } else {
-      // 1 Akun Murid = Maksimal 1 Kelas saja
       const myClass = all.find((c) => c.studentIds.includes(u.id));
       setClassrooms(myClass ? [myClass] : []);
     }
@@ -78,24 +93,53 @@ export default function HomePage() {
       : classrooms[0]?.visibility.enabledBabIds || ["bab-01"];
   const storyModules = ALL_MODULES.filter((m) => allowedBabIds.includes(m.id));
 
-  function handleCreateClass(e: React.FormEvent) {
+  async function handleCreateClass(e: React.FormEvent) {
     e.preventDefault();
     if (!user || !newNama.trim()) return;
-    createClassroom({
+    const created = createClassroom({
       nama: newNama.trim(),
       subjudul: newSub.trim() || "PAI-BP Fase E",
       guruId: user.id,
       guruNama: user.nama,
     });
+    await fetch("/api/classrooms", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "upsert_class", classroom: created }),
+    }).catch(() => {});
     setNewNama("");
     setNewSub("");
     setShowCreate(false);
     loadData();
   }
 
-  function handleJoinSingleClass(e: React.FormEvent) {
+  async function handleJoinSingleClass(e: React.FormEvent) {
     e.preventDefault();
     if (!user || !joinCode.trim()) return;
+    setJoinMsg("");
+    try {
+      const res = await fetch("/api/classrooms", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "join_by_code",
+          kodeKelas: joinCode.trim().toUpperCase(),
+          user,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.classroom) {
+          const all = getClassrooms().filter((c) => c.id !== data.classroom.id);
+          all.push(data.classroom);
+          window.localStorage.setItem("snp_classrooms_v1", JSON.stringify(all));
+          setJoinCode("");
+          setJoinMsg("");
+          loadData();
+          return;
+        }
+      }
+    } catch {}
     const joined = joinClassroomByCode(joinCode, user.id);
     if (!joined) {
       setJoinMsg("Kode kelas tidak ditemukan.");
