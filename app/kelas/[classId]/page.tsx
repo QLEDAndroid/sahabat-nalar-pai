@@ -23,6 +23,7 @@ import {
   deleteForumPost,
   getAssessments,
   getClassroomById,
+  getClassrooms,
   getCurrentUser,
   getForumPosts,
   getSubmissions,
@@ -171,8 +172,32 @@ export default function ClassroomDetailPage() {
     }
     setUser(u);
     const found = getClassroomById(classId);
-    setCls(found || null);
+    if (found) setCls(found);
     setPosts(getForumPosts(classId));
+    fetch(`/api/classrooms?classId=${encodeURIComponent(classId)}`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d?.classroom) {
+          const all = getClassrooms().filter((c) => c.id !== d.classroom.id);
+          all.push(d.classroom);
+          window.localStorage.setItem("snp_classrooms_v1", JSON.stringify(all));
+          setCls(d.classroom);
+          if (Array.isArray(d.posts)) setPosts(d.posts);
+          if (Array.isArray(d.submissions)) setSubmissions(d.submissions);
+          if (Array.isArray(d.users) && d.users.length > 0) {
+            setAllUsers((prev) => {
+              const map = new Map(prev.map((x) => [x.id, x]));
+              d.users.forEach((x: UserProfile) => map.set(x.id, x));
+              return Array.from(map.values());
+            });
+          }
+        } else if (!found) {
+          router.replace("/");
+        }
+      })
+      .catch(() => {
+        if (!found) router.replace("/");
+      });
     if (u.role === "murid") {
       fetch("/api/escalations", { cache: "no-store" })
         .then((r) => (r.ok ? r.json() : null))
@@ -1103,7 +1128,14 @@ export default function ClassroomDetailPage() {
                 </div>
                 {isGuru && (
                   <button
-                    onClick={() => setPosts(deleteForumPost(p.id, classId))}
+                    onClick={() => {
+                      setPosts(deleteForumPost(p.id, classId));
+                      fetch("/api/classrooms", {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ action: "delete_post", postId: p.id }),
+                      }).catch(() => {});
+                    }}
                     title="Hapus postingan"
                     className="rounded-lg p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
                   >
